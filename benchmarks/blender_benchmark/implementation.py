@@ -13,70 +13,32 @@ class BlenderBenchmark(BenchmarkWrapper):
     def __init__(self):
         self._settings = {}
         self.filePath = os.path.dirname(__file__)
-        self.baseCommand = "benchmark-launcher-cli"
+        self.baseCommand = "bin/benchmark-launcher-cli"
 
-    def setSettings(self, settings_file):
-        self._settings = json.load(open(settings_file, "r"))
-
-    def startBenchmark(self, verbosity=None):
-        self.getSettings(("blender", "download"))               #Downloads blender version specified in benchmarkinfo.json
-        self.getSettings(("scenes", "download"))                #Downloads the scenes as specified in benchmarkinfo.json
-        self.scenes = " ".join([str(elem) for elem in self._settings["scenes"]])
-        self.verbosity = verbosity
-        if self.verbosity == None:
-            self.verbosity = self._settings["verbosity"]
-
+    def setSettings(self, settings_file=None):
+        if settings_file is None:
+            _fileName = json.load(
+                open(os.path.join(self.filePath, "benchmark_info.json"), "r")
+            )["default_settings"]
+            settings_file = os.path.join(self.filePath, "settings", _fileName)
+        self._settings = json.load(
+            open(os.path.join(self.filePath, "settings", settings_file), "r")
+        )
         try:
-            startBench = subprocess.run(                                            #Runs the blender benchmark
+            subprocess.run(  # Downloads blender version listed in benchmark_info.json
                 [
-                    os.path.join(self.filePath, self.baseCommand),
-                    "benchmark",
-                    str(self.scenes),
-                    "-b",
-                    str(self._settings["blender_version"]),
-                    "--device-type",
-                    str(self._settings["device_type"]),
-                    "--json",
-                    "-v",
-                    str(self.verbosity),
-                ]
-            )
-        except subprocess.CalledProcessError as e:
-            print(e.output)
-            exit
-        if startBench.returncode != 0:
-            print(startBench.stderr)
-
-    def benchmarkStatus():
-        pass
-
-    def getSettings(self, args):
-        commands = {
-            "blender": {  # Container Dictionary for blender download managerc
-                "download": [  # Downloads the blender version specified in the settings
                     os.path.join(self.filePath, self.baseCommand),
                     "blender",
                     "download",
                     str(self._settings["blender_version"]),
                 ],
-                "list": [  # Lists available blender versions
-                    os.path.join(self.filePath, self.baseCommand),
-                    "blender",
-                    "list",
-                ],
-            },
-            "devices": [  # Prints compatible devices
-                os.path.join(self.filePath, self.baseCommand),
-                "devices",
-                "-b",
-                str(self._settings["blender_version"]),
-            ],
-            "help": [  # Prints the help window
-                os.path.join(self.filePath, self.baseCommand),
-                "--help",
-            ],
-            "scenes": {  # Container Dictionary for scenes download manager
-                "download": [  # Downloads the scenes mentioned in settings
+                stdout=subprocess.PIPE,
+            )
+        except subprocess.CalledProcessError as e:
+            return f"{e}: Can't download blender version listed in benchmark_info.json"
+        try:
+            subprocess.run(  # Downloads scenes listed in benchmark_info.json
+                [
                     os.path.join(self.filePath, self.baseCommand),
                     "scenes",
                     "download",
@@ -84,74 +46,71 @@ class BlenderBenchmark(BenchmarkWrapper):
                     str(self._settings["blender_version"]),
                 ]
                 + (self._settings["scenes"]),
-                "list": [  # Lists scenes
+                stdout=subprocess.PIPE,
+            )
+        except subprocess.CalledProcessError as e:
+            return f"{e}: Can't download blender scene(s) listed in benchmark_info.json"
+
+    def startBenchmark(self, verbosity=None):
+        """
+        Method defination for starting the benchmark
+        """
+        returnLog = []  # List for returning to logging func
+        self.verbosity = verbosity
+
+        if self.verbosity is None:
+            self.verbosity = self._settings["verbosity"]
+        print("Running Benchmark......")
+
+        for scene in self._settings["scenes"]:
+            print(f"Benchmarking Scene: {scene}")
+            res = subprocess.run(
+                [  # Subprocess to run the benchmark
                     os.path.join(self.filePath, self.baseCommand),
-                    "scenes",
-                    "list",
+                    "benchmark",
+                    str(scene),
                     "-b",
                     str(self._settings["blender_version"]),
+                    "--device-type",
+                    str(self._settings["device_type"]),
+                    "--json",
+                    "-v",
+                    str(self.verbosity),
                 ],
-            },
-            "clear_cache": [  # Clears cache generated by the blender cli
-                os.path.join(self.filePath, self.baseCommand),
-                "clear_cache",
-            ],
-        }
-        if len(args) == 2:
-            if args[1] == "help":
-                command = [os.path.join(self.filePath, self.baseCommand)] + [
-                    args[0],
-                    "help",
-                ]
-            else:
-                command = commands.get(args[0]).get(args[1])
-        elif len(args) == 1:
-            command = commands.get(args[0])
-        else:
-            raise Exception("Please check your command and enter again")
-        try:
-            process = subprocess.Popen(command, stdout=subprocess.PIPE)
-        except KeyError as e:
-            print(e.output)
-        if args[0] == "devices":
-            p2 = subprocess.Popen(
-                ["grep","-wv", "CPU"], stdin=process.stdout, stdout=subprocess.PIPE
+                stdout=subprocess.PIPE,
             )
-            process.stdout.close()
-            print(p2.communicate()[0].decode())
-        else:
-            print(process.communicate()[0].decode())
+
+            if res.stderr or res.returncode != 0:  # Error catching
+                print(f"Blender-benchmark scene: {scene} exited with non zero error")
+                returnLog.append({"scene": scene, "run": "Unsuccessful"})
+                continue
+
+            s = res.stdout.decode("utf-8")  # get output in proper formatting
+            s = s[4:-2].replace("false", "False")  # Replace to use with eval
+            s = eval(s)  # Converting to a dictionary
+            returndict = {}
+            specs = [
+                "timestamp",
+                "stats",
+                "blender_version",
+                "benchmark_launcher",
+                "benchmark_script",
+                "scene",
+            ]
+
+            for spec in specs:
+                returndict[spec] = s.get(spec, None)
+            returnLog.append(returndict)
+        return {"output": returnLog}
+
+    def benchmarkStatus():
+        pass
+
+    def getSettings(self):
+        """
+        Gets the settings for the benchmark
+        """
+        pass
 
     def stopBenchmark():
         pass
-
-
-"""
-TODO:[Logger Output after parsing]
-[
-  {
-    "stats": {
-      "device_peak_memory": 146,
-      "total_render_time": 208.673,
-      "render_time_no_sync": 206.112
-    }
-    "timestamp": "2021-07-11T09:00:52.938463+00:00",
-    "blender_version": {
-      "label": "2.92",                                                                            
-      "checksum": "2cd17ad6e9d6c241ac14b84ad6e72b507aeec979da3d926b1a146e88e0eb3eb4"
-    },
-    "benchmark_launcher": {
-      "label": "2.0.5",
-      "checksum": "0513a4a626bb0ee387366f67a632ea0f886ee5906aaafe148d473842059fb2ec"
-    },
-    "benchmark_script": {
-      "label": "2.0.1",
-      "checksum": "dee17c82d883838f6da21e7c86f368cda2ab8399eac10b660e199628aca09ec0"
-    },
-    "scene": {
-      "label": "bmw27",
-      "checksum": "bc4fd79cbd85a1cc47926e848ec8f322872f5c170ef33c21e0d0ce303c0ec9ea"
-    },
-  }
-]
-"""

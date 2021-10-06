@@ -4,4 +4,6 @@ config/mlperf_config.json
 *.pyc
 */bin/
 benchmarks/blender_benchmark/benchmark-launcher-cli
-runner.py
+logs/*
+common/phoronix-benchs/
+benchmarks/phoronix-*
